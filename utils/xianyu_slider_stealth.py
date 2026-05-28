@@ -142,6 +142,7 @@ def build_cookie_verification_sign(ts: str, token: str, data: str) -> str:
 def probe_cookie_verification_from_cookie(
     cookie_text: str,
     proxy: Optional[Dict[str, Any]] = None,
+    timeout: float = 30,
 ) -> Dict[str, Any]:
     import requests
 
@@ -215,7 +216,7 @@ def probe_cookie_verification_from_cookie(
         params=params,
         data={"data": data_val},
         proxies=proxies,
-        timeout=30,
+        timeout=timeout,
     )
     response.raise_for_status()
     payload = response.json()

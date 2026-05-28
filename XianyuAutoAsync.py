@@ -5895,6 +5895,134 @@ class XianyuLive:
         window = window_seconds or self.slider_success_reentry_window
         return (time.time() - self.last_slider_success_at) <= window
 
+    @staticmethod
+    def _coerce_config_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {'1', 'true', 'yes', 'on'}:
+            return True
+        if text in {'0', 'false', 'no', 'off'}:
+            return False
+        return default
+
+    @classmethod
+    def _is_soft_auth_token_preflight_enabled(cls, source: str = '') -> bool:
+        enabled = cls._coerce_config_bool(
+            RISK_CONTROL.get('soft_auth_token_preflight_enabled', True),
+            True,
+        )
+        if not enabled:
+            return False
+
+        normalized_source = str(source or '').strip().lower()
+        if normalized_source.startswith('qr_login'):
+            # 扫码登录当前有稳定期保护，默认不主动请求 token；需要时可通过配置显式开启。
+            return cls._coerce_config_bool(
+                RISK_CONTROL.get('soft_auth_token_preflight_qr_enabled', False),
+                False,
+            )
+        return True
+
+    @staticmethod
+    def _get_soft_auth_token_preflight_timeout() -> float:
+        try:
+            timeout = float(RISK_CONTROL.get('soft_auth_token_preflight_timeout_seconds', 5.0) or 5.0)
+        except (TypeError, ValueError):
+            timeout = 5.0
+        return max(2.0, min(timeout, 15.0))
+
+    async def soft_preflight_token_after_auth(
+        self,
+        cookie_string: str = None,
+        source: str = 'auth_success',
+        proxy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """认证成功后的轻量 token 软预检。
+
+        该方法只做观测与 token 预热：网络失败、超时、未知响应都不会阻断既有登录/刷新流程。
+        默认也不会在扫码登录稳定期内主动触发，避免破坏当前风控保护策略。
+        """
+        normalized_source = str(source or 'auth_success').strip() or 'auth_success'
+        if not self._is_soft_auth_token_preflight_enabled(normalized_source):
+            return {
+                'status': 'skipped',
+                'source': normalized_source,
+                'reason': 'disabled_by_config',
+                'token_cached': False,
+            }
+
+        target_cookie_string = str(cookie_string or self.cookies_str or '').strip()
+        if not target_cookie_string:
+            logger.warning(f"【{self.cookie_id}】{normalized_source} 软Token预检跳过：Cookie为空")
+            return {
+                'status': 'skipped',
+                'source': normalized_source,
+                'reason': 'empty_cookie',
+                'token_cached': False,
+            }
+
+        timeout = self._get_soft_auth_token_preflight_timeout()
+        try:
+            from utils.xianyu_slider_stealth import probe_cookie_verification_from_cookie
+
+            logger.info(
+                f"【{self.cookie_id}】开始{normalized_source}软Token预检，timeout={timeout:.1f}s（失败不阻断原流程）"
+            )
+            probe_result = await asyncio.to_thread(
+                probe_cookie_verification_from_cookie,
+                target_cookie_string,
+                proxy if proxy is not None else self.proxy_config,
+                timeout,
+            )
+        except Exception as preflight_err:
+            logger.warning(
+                f"【{self.cookie_id}】{normalized_source}软Token预检未完成，不阻断原流程: {self._safe_str(preflight_err)}"
+            )
+            return {
+                'status': 'inconclusive',
+                'source': normalized_source,
+                'reason': self._safe_str(preflight_err),
+                'token_cached': False,
+            }
+
+        status = str(probe_result.get('status') or 'unknown')
+        verification_url = str(probe_result.get('verification_url') or '').strip()
+        token_cached = False
+        if status == 'cookie_valid':
+            data_payload = (probe_result.get('payload') or {}).get('data') or {}
+            access_token = str(data_payload.get('accessToken') or '').strip()
+            if access_token:
+                self.cache_auth_prewarmed_token(
+                    self.cookie_id,
+                    access_token,
+                    source=f'soft_preflight:{normalized_source}',
+                )
+                token_cached = True
+            logger.info(
+                f"【{self.cookie_id}】{normalized_source}软Token预检通过"
+                f"{'，已缓存预热token' if token_cached else ''}"
+            )
+        elif status == 'verification_required':
+            logger.warning(
+                f"【{self.cookie_id}】{normalized_source}软Token预检返回验证要求，不阻断原流程: {verification_url or '无URL'}"
+            )
+        else:
+            logger.warning(
+                f"【{self.cookie_id}】{normalized_source}软Token预检结果未知(status={status})，不阻断原流程"
+            )
+
+        return {
+            'status': status,
+            'source': normalized_source,
+            'verification_url': verification_url,
+            'token_cached': token_cached,
+            'success_ret': bool(probe_result.get('success_ret')),
+            'has_token_payload': bool(probe_result.get('has_token_payload')),
+        }
+
     async def preflight_token_after_manual_refresh(self) -> str:
         """手动刷新成功后的 token 预检，确认新实例可直接完成初始化。
 
@@ -7024,6 +7152,12 @@ class XianyuLive:
                 self._set_runtime_cookie_state(
                     cookies_str=new_cookies_str,
                     cookies_dict=new_cookies_dict,
+                    source="password_login_refresh",
+                )
+
+                # 认证成功后的轻量 Token 软预检：只用于观测/预热，不阻断原有更新与重启流程
+                await self.soft_preflight_token_after_auth(
+                    new_cookies_str,
                     source="password_login_refresh",
                 )
 

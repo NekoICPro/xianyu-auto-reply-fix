@@ -137,6 +137,9 @@ RISK_CONTROL = config.get('RISK_CONTROL', {
     'token_refresh_dedup_window_seconds': 60,
     'token_retry_min_wait_seconds': 180,
     'max_post_slider_session_retries': 1,
+    'soft_auth_token_preflight_enabled': True,
+    'soft_auth_token_preflight_timeout_seconds': 5.0,
+    'soft_auth_token_preflight_qr_enabled': False,
 })
 _cookies_raw = config.get('COOKIES', [])
 if isinstance(_cookies_raw, list):
