@@ -9475,6 +9475,7 @@ async def _publish_product_to_account(
     cookies_str = str(cookies_map.get(cleaned_account_id) or '').strip()
     if not cookies_str:
         raise HTTPException(status_code=400, detail="账号 Cookie 为空，无法发布商品")
+    proxy_config = db_manager.get_cookie_proxy_config(cleaned_account_id)
 
     cleaned_title = str(title or '').strip()
     cleaned_description = str(description or '').strip()
@@ -9516,7 +9517,7 @@ async def _publish_product_to_account(
             f"title={cleaned_title}, images={len(image_payloads)}, delivery_choice={delivery_choice}"
         )
 
-        async with ItemPublisher(cookies_str, cleaned_account_id) as publisher:
+        async with ItemPublisher(cookies_str, cleaned_account_id, proxy_config=proxy_config) as publisher:
             publish_result = await publisher.publish_item(
                 title=cleaned_title,
                 description=cleaned_description,
