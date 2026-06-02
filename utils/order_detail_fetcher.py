@@ -222,6 +222,7 @@ class OrderDetailFetcher:
             
         except Exception as e:
             logger.error(f"浏览器初始化失败: {e}")
+            await self._force_close_browser()
             return False
 
     async def _set_cookies(self):
