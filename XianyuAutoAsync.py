@@ -2019,6 +2019,8 @@ class XianyuLive:
         self.pending_platform_confirm_retry_lock = asyncio.Lock()  # 待补确认自动重试锁
         self.last_pending_platform_confirm_retry_time = 0.0
         self.pending_platform_confirm_retry_cooldown = 60  # 1分钟内不重复自动扫描待补确认订单
+        self.last_platform_confirm_auth_recovery_time = 0.0
+        self.platform_confirm_auth_recovery_cooldown = 300  # 5分钟内不重复触发确认发货失败后的认证恢复
 
         # 自动发货已发送订单记录
         self.delivery_sent_orders = set()  # 记录已发货的订单ID，防止重复发货
@@ -3670,6 +3672,60 @@ class XianyuLive:
             'TOKEN_EXOIRED',
         ))
 
+    def _is_platform_confirm_auth_error(self, error: Any) -> bool:
+        """判断确认发货失败是否明确需要恢复 Cookie/Token 登录态。"""
+        error_text = str(error or '')
+        return any(keyword in error_text for keyword in (
+            'FAIL_SYS_SESSION_EXPIRED',
+            'Session过期',
+            '令牌过期',
+            'FAIL_SYS_TOKEN_EXPIRED',
+            'FAIL_SYS_TOKEN_EXOIRED',
+            'TOKEN_EXPIRED',
+            'TOKEN_EXOIRED',
+        ))
+
+    def _schedule_auth_recovery_after_platform_confirm_failure(self, order_id: str = None, error: Any = None) -> None:
+        """确认发货因登录态失败时，后台触发认证恢复；恢复成功后会自动扫待补确认。"""
+        if not self._is_platform_confirm_auth_error(error):
+            return
+
+        current_time = time.time()
+        if current_time - self.last_platform_confirm_auth_recovery_time < self.platform_confirm_auth_recovery_cooldown:
+            logger.info(
+                f"【{self.cookie_id}】确认发货认证恢复仍在冷却期内，跳过重复触发: order_id={order_id}"
+            )
+            return
+        self.last_platform_confirm_auth_recovery_time = current_time
+
+        try:
+            self._create_tracked_task(
+                self._recover_auth_after_platform_confirm_failure(order_id=order_id, error=self._safe_str(error))
+            )
+        except RuntimeError:
+            return
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】调度确认发货认证恢复失败: {self._safe_str(e)}")
+
+    async def _recover_auth_after_platform_confirm_failure(self, order_id: str = None, error: str = '') -> None:
+        """确认发货 Session/Token 过期后的后台恢复流程。"""
+        try:
+            logger.warning(
+                f"【{self.cookie_id}】确认发货失败触发认证恢复: order_id={order_id}, error={error}"
+            )
+            await asyncio.sleep(1)
+            token = await self.refresh_token(captcha_retry_count=1, allow_password_login_recovery=True)
+            if token:
+                logger.info(f"【{self.cookie_id}】确认发货失败后的认证恢复成功，准备自动补确认: order_id={order_id}")
+                self._schedule_pending_platform_confirm_retry("确认发货认证恢复成功")
+            else:
+                logger.warning(
+                    f"【{self.cookie_id}】确认发货失败后的认证恢复未成功: "
+                    f"status={self.last_token_refresh_status}, error={self.last_token_refresh_error_message}"
+                )
+        except Exception as e:
+            logger.warning(f"【{self.cookie_id}】确认发货失败后的认证恢复异常: {self._safe_str(e)}")
+
     def _mark_delivery_pending_platform_confirm(self, order_id: str, item_id: str, buyer_id: str,
                                                 delivery_meta: dict = None, confirm_error: str = None,
                                                 expected_quantity: int = 1,
@@ -3709,6 +3765,7 @@ class XianyuLive:
             context=context
         )
         logger.warning(f"【{self.cookie_id}】订单 {order_id} 已记录为：卡券已发出、平台确认失败、等待补确认。原因: {error_text}")
+        self._schedule_auth_recovery_after_platform_confirm_failure(order_id=order_id, error=error_text)
         return summary
 
     def _get_order_expected_delivery_quantity(self, order_id: str) -> int:
