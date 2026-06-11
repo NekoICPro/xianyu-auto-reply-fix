@@ -22381,6 +22381,9 @@ let chatOldestMsgId = null;
 let chatSseAbortController = null;
 let chatSseRetryCount = 0;
 let chatSseShouldRun = false;
+let chatUserInfoCache = {};
+let chatUserInfoHydrationTimer = null;
+const CHAT_USER_INFO_MISS_TTL_MS = 10 * 60 * 1000;
 
 function buildSafeCheckboxId(prefix, rawValue) {
     const normalized = String(rawValue || '')
@@ -22414,6 +22417,178 @@ function resolveSessionAvatar(session) {
     }
     const displayName = resolveSessionDisplayName(session);
     return { type: 'text', value: (displayName || '?').charAt(0).toUpperCase() };
+}
+
+function buildChatUserInfoCacheKey(cookieId, chatId) {
+    return `${String(cookieId || '').trim()}::${String(chatId || '').trim().replace(/@goofish$/i, '')}`;
+}
+
+function isValidChatDisplayName(value) {
+    const text = String(value || '').trim();
+    if (!text || text === '-' || text === '未知用户') return false;
+    if (/^\d+$/.test(text)) return false;
+    return !['工作台通知', '订单', '交易消息', '买家', '全部'].includes(text);
+}
+
+function applyChatUserInfoToSession(session, info) {
+    if (!session || !info) return { session, changed: false };
+    const updates = {};
+    const avatar = String(info.avatar || '').trim();
+    const nick = String(info.fish_nick || info.buyer_name_resolved || '').trim();
+    const senderId = String(info.sender_id || '').trim();
+
+    if (avatar && avatar !== String(session.avatar || '')) {
+        updates.avatar = avatar;
+    }
+    if (isValidChatDisplayName(nick)) {
+        if (nick !== String(session.fish_nick || '')) updates.fish_nick = nick;
+        if (nick !== String(session.buyer_name_resolved || '')) updates.buyer_name_resolved = nick;
+        if (!isValidChatDisplayName(session.buyer_name) || String(session.buyer_name || '').trim() === String(session.buyer_id || '').trim()) {
+            updates.buyer_name = nick;
+        }
+        if (!isValidChatDisplayName(session.sender_name) || String(session.sender_name || '').trim() === String(session.sender_id || '').trim()) {
+            updates.sender_name = nick;
+        }
+    }
+    if (senderId && !session.sender_id) {
+        updates.sender_id = senderId;
+    }
+
+    return Object.keys(updates).length > 0
+        ? { session: { ...session, ...updates }, changed: true }
+        : { session, changed: false };
+}
+
+function applyCachedChatUserInfosToSessions() {
+    if (!chatCurrentCookieId || !chatSessionsCache.length) return false;
+    let changed = false;
+    chatSessionsCache = chatSessionsCache.map(session => {
+        const cacheKey = buildChatUserInfoCacheKey(chatCurrentCookieId, session?.chat_id);
+        const cached = chatUserInfoCache[cacheKey];
+        if (!cached || cached.__miss) return session;
+        const result = applyChatUserInfoToSession(session, cached);
+        changed = changed || result.changed;
+        return result.session;
+    });
+    return changed;
+}
+
+function shouldHydrateChatSessionUserInfo(session) {
+    if (!chatCurrentCookieId || !session?.chat_id) return false;
+    const cacheKey = buildChatUserInfoCacheKey(chatCurrentCookieId, session.chat_id);
+    const cached = chatUserInfoCache[cacheKey];
+    if (cached?.__miss && Date.now() - Number(cached.cachedAt || 0) < CHAT_USER_INFO_MISS_TTL_MS) return false;
+
+    const displayName = resolveSessionDisplayName(session);
+    return !session.avatar || !isValidChatDisplayName(displayName);
+}
+
+function syncActiveChatHeaderName() {
+    if (!chatCurrentChatId) return;
+    const currentSession = chatSessionsCache.find(session => session.chat_id === chatCurrentChatId);
+    if (!currentSession) return;
+    chatCurrentSenderName = resolveSessionDisplayName(currentSession);
+    const headerName = document.getElementById('chatHeaderName');
+    if (headerName) headerName.textContent = chatCurrentSenderName;
+}
+
+function rerenderChatSessionsAfterUserInfoUpdate() {
+    syncActiveChatHeaderName();
+    const keyword = String(document.getElementById('chatSearchInput')?.value || '').trim();
+    if (keyword) {
+        filterChatSessions();
+    } else {
+        renderChatSessions(chatSessionsCache);
+    }
+}
+
+function applyChatUserInfosToSessions(users) {
+    if (!users || typeof users !== 'object') return false;
+    let changed = false;
+    chatSessionsCache = chatSessionsCache.map(session => {
+        const chatId = String(session?.chat_id || '').trim().replace(/@goofish$/i, '');
+        const info = users[chatId];
+        if (!info) return session;
+        const result = applyChatUserInfoToSession(session, info);
+        changed = changed || result.changed;
+        return result.session;
+    });
+    if (changed) {
+        rerenderChatSessionsAfterUserInfoUpdate();
+    }
+    return changed;
+}
+
+function scheduleChatUserInfoHydration(sessions) {
+    if (chatUserInfoHydrationTimer) {
+        clearTimeout(chatUserInfoHydrationTimer);
+    }
+    chatUserInfoHydrationTimer = setTimeout(() => {
+        chatUserInfoHydrationTimer = null;
+        hydrateChatUserInfos(sessions);
+    }, 120);
+}
+
+async function hydrateChatUserInfos(sessions) {
+    if (!chatCurrentCookieId || !Array.isArray(sessions) || !sessions.length) return;
+    if (applyCachedChatUserInfosToSessions()) {
+        rerenderChatSessionsAfterUserInfoUpdate();
+        return;
+    }
+
+    const seen = new Set();
+    const queries = [];
+    for (const session of sessions) {
+        const chatId = String(session?.chat_id || '').trim().replace(/@goofish$/i, '');
+        if (!chatId || seen.has(chatId) || !shouldHydrateChatSessionUserInfo(session)) continue;
+        seen.add(chatId);
+        queries.push({
+            chat_id: chatId,
+            sender_id: session.sender_id || session.buyer_id || '',
+            buyer_id: session.buyer_id || '',
+            sender_name: session.sender_name || '',
+            buyer_name: session.buyer_name || session.buyer_name_resolved || session.fish_nick || '',
+            session_type: session.session_type || 1,
+            message_id: session.message_id || '',
+        });
+        if (queries.length >= 24) break;
+    }
+    if (!queries.length) return;
+
+    try {
+        const token = getAuthToken();
+        const response = await fetch(`${apiBase}/api/chat/avatars`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ cookie_id: chatCurrentCookieId, queries }),
+        });
+        if (response.status === 401) {
+            stopChatStream();
+            localStorage.removeItem('auth_token');
+            window.location.href = '/';
+            return;
+        }
+        if (!response.ok) return;
+        const result = await response.json();
+        const users = result?.users || {};
+        const now = Date.now();
+
+        queries.forEach(query => {
+            const chatId = String(query.chat_id || '').trim();
+            const cacheKey = buildChatUserInfoCacheKey(chatCurrentCookieId, chatId);
+            const info = users[chatId];
+            chatUserInfoCache[cacheKey] = info && (info.avatar || info.fish_nick || info.buyer_name_resolved)
+                ? { ...info, cachedAt: now }
+                : { __miss: true, cachedAt: now };
+        });
+
+        applyChatUserInfosToSessions(users);
+    } catch (error) {
+        console.debug('批量补全客服头像失败:', error);
+    }
 }
 
 function resolveSessionPreview(session) {
@@ -22552,6 +22727,10 @@ async function toggleChatAccountConnection(cookieId, disconnect = false) {
 }
 
 async function selectChatAccount(cookieId) {
+    if (chatUserInfoHydrationTimer) {
+        clearTimeout(chatUserInfoHydrationTimer);
+        chatUserInfoHydrationTimer = null;
+    }
     chatCurrentCookieId = cookieId;
     chatCurrentAccount = chatAccountsCache.find(account => account.id === cookieId) || null;
     chatCurrentChatId = '';
@@ -22706,6 +22885,7 @@ function renderChatSessions(sessions) {
         more.onclick = loadMoreChatSessions;
         body.appendChild(more);
     }
+    scheduleChatUserInfoHydration(sessions);
 }
 
 function mergeHydrationFallbackSessions() {

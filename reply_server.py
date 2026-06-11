@@ -2883,6 +2883,21 @@ class ChatSendRequest(BaseModel):
     message: str
 
 
+class ChatAvatarQuery(BaseModel):
+    chat_id: str
+    sender_id: Optional[str] = None
+    buyer_id: Optional[str] = None
+    sender_name: Optional[str] = None
+    buyer_name: Optional[str] = None
+    session_type: Optional[int] = 1
+    message_id: Optional[str] = None
+
+
+class ChatAvatarBatchRequest(BaseModel):
+    cookie_id: str
+    queries: List[ChatAvatarQuery] = []
+
+
 class SaveItemKeywordsRequest(BaseModel):
     keywords: list
     item_reply: Optional[str] = None
@@ -2913,6 +2928,9 @@ class ChatHydrationDebug(BaseModel):
 
 _chat_session_enrichment_cache: Dict[str, Dict[str, Any]] = {}
 _CHAT_SESSION_ENRICHMENT_TTL_SECONDS = 180
+_chat_user_info_cache: Dict[str, Dict[str, Any]] = {}
+_CHAT_USER_INFO_TTL_SECONDS = 24 * 60 * 60
+_CHAT_USER_INFO_MISS_TTL_SECONDS = 10 * 60
 _chat_history_probe_cache: Dict[str, Dict[str, Any]] = {}
 _CHAT_HISTORY_PROBE_TTL_SECONDS = 6 * 60 * 60
 
@@ -3034,6 +3052,120 @@ def _set_cached_chat_session_enrichment(cache_key: str, value: Dict[str, Any]) -
     }
 
 
+def _build_chat_user_info_cache_key(cookie_id: str, session_id: str, session_type: int = 1, is_owner: bool = False) -> str:
+    return f"{str(cookie_id or '').strip()}:{_clean_goofish_id(session_id)}:{int(session_type or 1)}:{1 if is_owner else 0}"
+
+
+def _get_cached_chat_user_info(cache_key: str) -> Optional[Dict[str, Any]]:
+    cached = _chat_user_info_cache.get(cache_key)
+    if not cached:
+        return None
+
+    ttl = _CHAT_USER_INFO_MISS_TTL_SECONDS if cached.get('miss') else _CHAT_USER_INFO_TTL_SECONDS
+    if (time.time() - float(cached.get('cached_at') or 0)) > ttl:
+        _chat_user_info_cache.pop(cache_key, None)
+        return None
+
+    return {} if cached.get('miss') else dict(cached.get('value') or {})
+
+
+def _set_cached_chat_user_info(cache_key: str, value: Optional[Dict[str, Any]] = None, *, miss: bool = False) -> None:
+    _chat_user_info_cache[cache_key] = {
+        'cached_at': time.time(),
+        'value': dict(value or {}),
+        'miss': bool(miss),
+    }
+
+
+def _normalize_chat_user_info_enrichment(user_info: Dict[str, Any], *, fallback_name: Any = None, sender_id: Any = None) -> Dict[str, Any]:
+    if not isinstance(user_info, dict):
+        user_info = {}
+
+    nick = (
+        user_info.get('fishNick')
+        or user_info.get('nick')
+        or user_info.get('nickName')
+        or user_info.get('displayName')
+        or ''
+    )
+    if not _is_valid_chat_display_name(nick) and _is_valid_chat_display_name(fallback_name):
+        nick = str(fallback_name).strip()
+
+    avatar = user_info.get('logo') or user_info.get('avatar') or user_info.get('avatarUrl') or ''
+    cleaned_sender_id = _clean_goofish_id(sender_id)
+
+    enriched: Dict[str, Any] = {}
+    if avatar:
+        enriched['avatar'] = avatar
+    if _is_valid_chat_display_name(nick):
+        enriched['fish_nick'] = str(nick).strip()
+        enriched['buyer_name_resolved'] = str(nick).strip()
+    user_ext = _compact_chat_user_ext(user_info.get('ext'))
+    if user_ext:
+        enriched['user_ext'] = user_ext
+    if cleaned_sender_id:
+        enriched['sender_id'] = cleaned_sender_id
+    return enriched
+
+
+async def _fetch_chat_user_info_enrichment(
+    cookie_id: str,
+    session_id: str,
+    *,
+    session_type: int = 1,
+    is_owner: bool = False,
+    message_id: Optional[str] = None,
+    live_instance: Any = None,
+    fallback_name: Any = None,
+    sender_id: Any = None,
+) -> Dict[str, Any]:
+    session_id = _clean_goofish_id(session_id)
+    if not cookie_id or not session_id:
+        return {}
+
+    try:
+        normalized_session_type = int(session_type or 1)
+    except (TypeError, ValueError):
+        normalized_session_type = 1
+
+    cache_key = _build_chat_user_info_cache_key(cookie_id, session_id, normalized_session_type, is_owner=is_owner)
+    cached = _get_cached_chat_user_info(cache_key)
+    if cached is not None:
+        if cached and _clean_goofish_id(sender_id) and not cached.get('sender_id'):
+            cached = {**cached, 'sender_id': _clean_goofish_id(sender_id)}
+        return cached
+
+    live_instance = live_instance or _get_chat_live_instance(cookie_id)
+    if not live_instance:
+        return {}
+
+    try:
+        user_info_result = await _run_live_instance_on_manager_loop(
+            cookie_id,
+            lambda: live_instance.fetch_im_user_info(
+                session_id=session_id,
+                session_type=normalized_session_type,
+                is_owner=is_owner,
+                message_id=message_id or None,
+            ),
+            timeout=20,
+        )
+        user_info = user_info_result.get('userInfo', {}) if isinstance(user_info_result, dict) else {}
+        enriched = _normalize_chat_user_info_enrichment(
+            user_info,
+            fallback_name=fallback_name,
+            sender_id=sender_id,
+        )
+        if enriched:
+            _set_cached_chat_user_info(cache_key, enriched)
+        else:
+            _set_cached_chat_user_info(cache_key, miss=True)
+        return enriched
+    except Exception as e:
+        logger.debug(f"会话用户信息批量补全失败: cookie_id={cookie_id}, session_id={session_id}, error={mask_sensitive_text(e)}")
+        return {}
+
+
 async def _enrich_single_chat_session(cookie_id: str, session: Dict[str, Any]) -> Dict[str, Any]:
     from XianyuAutoAsync import XianyuLive
 
@@ -3057,21 +3189,17 @@ async def _enrich_single_chat_session(cookie_id: str, session: Dict[str, Any]) -
     enriched: Dict[str, Any] = {}
 
     try:
-        user_info_result = await live_instance.fetch_im_user_info(
-            session_id=session_id,
+        user_enrichment = await _fetch_chat_user_info_enrichment(
+            cookie_id,
+            session_id,
             session_type=session_type,
-            is_owner=False,
+            live_instance=live_instance,
+            fallback_name=session.get('buyer_name') or session.get('sender_name'),
+            sender_id=sender_id or session.get('sender_id'),
             message_id=session.get('message_id') or None,
         )
-        user_info = user_info_result.get('userInfo', {}) if isinstance(user_info_result, dict) else {}
-        if user_info:
-            enriched.update({
-                'avatar': user_info.get('logo'),
-                'fish_nick': user_info.get('fishNick') or user_info.get('nick') or session.get('buyer_name') or session.get('sender_name'),
-                'user_ext': _compact_chat_user_ext(user_info.get('ext')),
-                'buyer_name_resolved': user_info.get('fishNick') or user_info.get('nick') or session.get('buyer_name'),
-                'sender_id': sender_id or session.get('sender_id'),
-            })
+        if user_enrichment:
+            enriched.update(user_enrichment)
     except Exception as e:
         logger.debug(f"会话用户信息增强失败: cookie_id={cookie_id}, session_id={session_id}, error={mask_sensitive_text(e)}")
 
@@ -13773,6 +13901,65 @@ async def get_chat_sessions(
     except Exception as e:
         logger.error(f"获取会话列表失败: {mask_sensitive_text(e)}")
         raise HTTPException(status_code=500, detail="获取会话列表失败")
+
+
+@app.post('/api/chat/avatars')
+async def get_chat_avatar_infos(
+    req: ChatAvatarBatchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """批量补全在线客服会话头像与真实昵称，供前端后台懒加载使用。"""
+    try:
+        cookie_id = _ensure_cookie_access(req.cookie_id, current_user)
+        live_instance = _get_chat_live_instance(cookie_id)
+        users: Dict[str, Dict[str, Any]] = {}
+        seen_session_ids = set()
+
+        for query in list(req.queries or [])[:30]:
+            session_id = _clean_goofish_id(query.chat_id)
+            if not session_id or session_id in seen_session_ids:
+                continue
+            seen_session_ids.add(session_id)
+
+            try:
+                session_type = int(query.session_type or 1)
+            except (TypeError, ValueError):
+                session_type = 1
+
+            sender_id = _clean_goofish_id(query.sender_id or query.buyer_id)
+            fallback_name = query.buyer_name if _is_valid_chat_display_name(query.buyer_name) else query.sender_name
+            info = await _fetch_chat_user_info_enrichment(
+                cookie_id,
+                session_id,
+                session_type=session_type,
+                live_instance=live_instance,
+                fallback_name=fallback_name,
+                sender_id=sender_id,
+                message_id=query.message_id or None,
+            )
+            if not info:
+                continue
+
+            users[session_id] = {
+                'chat_id': session_id,
+                'avatar': info.get('avatar') or '',
+                'fish_nick': info.get('fish_nick') or '',
+                'buyer_name_resolved': info.get('buyer_name_resolved') or info.get('fish_nick') or '',
+                'sender_id': info.get('sender_id') or sender_id,
+            }
+
+        return {
+            'success': True,
+            'users': users,
+            'count': len(users),
+            'queried': len(seen_session_ids),
+            'runtime_status': _build_live_runtime_status(cookie_id),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量查询客服头像失败: {mask_sensitive_text(e)}")
+        raise HTTPException(status_code=500, detail="批量查询客服头像失败")
 
 
 @app.get('/api/chat/messages')
