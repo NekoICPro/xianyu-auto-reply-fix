@@ -19478,6 +19478,33 @@ function getRiskTriggerSceneLabel(triggerScene) {
     return sceneLabels[normalizedScene] || normalizedScene || '-';
 }
 
+function getRiskCaptchaEngineMeta(log = {}) {
+    const meta = log && typeof log.event_meta === 'object' && log.event_meta ? log.event_meta : {};
+    const normalizedEngine = String(log.captcha_engine || meta.captcha_engine || '').trim().toLowerCase();
+    const engineMap = {
+        playwright: { label: 'Playwright', className: 'bg-primary' },
+        drissionpage: { label: 'Drission', className: 'bg-info text-dark' },
+        remote: { label: '远程', className: 'bg-dark' },
+        real_mouse: { label: '真实鼠标', className: 'bg-success' },
+        manual: { label: '手动', className: 'bg-secondary' }
+    };
+
+    if (!normalizedEngine) {
+        return { label: '-', className: 'bg-light text-muted border', raw: '' };
+    }
+
+    return {
+        ...(engineMap[normalizedEngine] || { label: normalizedEngine, className: 'bg-secondary' }),
+        raw: normalizedEngine
+    };
+}
+
+function renderRiskCaptchaEngineCell(log = {}) {
+    const engine = getRiskCaptchaEngineMeta(log);
+    const title = engine.raw ? `验证引擎: ${engine.raw}` : '暂无验证引擎记录';
+    return `<span class="badge ${engine.className}" title="${escapeHtml(title)}">${escapeHtml(engine.label)}</span>`;
+}
+
 function formatRiskDuration(durationMs) {
     const value = Number(durationMs);
     if (!Number.isFinite(value) || value <= 0) {
@@ -19585,6 +19612,7 @@ function displayRiskControlLogs(logs) {
             <td class="text-nowrap">${eventCategoryBadge}</td>
             <td class="text-nowrap">${triggerSceneBadge}</td>
             <td>${statusBadge}</td>
+            <td class="text-nowrap">${renderRiskCaptchaEngineCell(log)}</td>
             <td class="risk-log-cell-summary">${renderRiskLogSummaryCell(log)}</td>
             <td class="risk-log-cell-outcome">${renderRiskLogOutcomeCell(log)}</td>
             <td class="text-nowrap">${escapeHtml(durationText)}</td>

@@ -802,11 +802,11 @@
 }
 
 .risk-log-col-time {
-  width: 12%;
+  width: 11%;
 }
 
 .risk-log-col-account {
-  width: 11%;
+  width: 10%;
 }
 
 .risk-log-col-category {
@@ -821,12 +821,16 @@
   width: 6%;
 }
 
+.risk-log-col-engine {
+  width: 8%;
+}
+
 .risk-log-col-summary {
-  width: 14%;
+  width: 13%;
 }
 
 .risk-log-col-outcome {
-  width: 14%;
+  width: 13%;
 }
 
 .risk-log-col-duration {
@@ -834,7 +838,7 @@
 }
 
 .risk-log-col-session {
-  width: 16%;
+  width: 12%;
 }
 
 .risk-log-col-action {
