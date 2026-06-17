@@ -2,7 +2,12 @@ import unittest
 from unittest import mock
 
 from XianyuAutoAsync import ConnectionState, XianyuLive
-from utils.slider_orchestrator import extract_x5_cookies, has_x5_cookie, validate_slider_result
+from utils.slider_orchestrator import (
+    extract_x5_cookies,
+    has_x5_cookie,
+    run_slider_with_fallback,
+    validate_slider_result,
+)
 
 
 class _FakeTokenRefreshResponse:
@@ -75,6 +80,35 @@ class SliderOrchestratorTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.cookies["x5sec"], "ticket")
         self.assertEqual(result.x5_cookies, {"x5sec": "ticket"})
+    def test_drissionpage_fallback_can_recover_primary_failure(self):
+        class _PrimarySlider:
+            user_id = "fallback_user"
+            initial_cookies = "unb=fallback_user; cookie2=old"
+            headless = True
+
+            def run(self, *_args, **_kwargs):
+                return True, {"unb": "fallback_user"}
+
+        class _FallbackHandler:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def get_cookies(self, url, existing_cookies_str=None, cookie_id="unknown"):
+                self.url = url
+                self.existing_cookies_str = existing_cookies_str
+                self.cookie_id = cookie_id
+                return "unb=fallback_user; x5sec=fallback_ticket"
+
+        result = run_slider_with_fallback(
+            _PrimarySlider(),
+            "https://example.com/punish?action=captcha",
+            fallback_enabled=True,
+            handler_factory=_FallbackHandler,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.engine, "drissionpage")
+        self.assertEqual(result.x5_cookies, {"x5sec": "fallback_ticket"})
 
 
 class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
@@ -163,6 +197,7 @@ class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
+             mock.patch.dict("os.environ", {"XY_SLIDER_DRISSION_FALLBACK": "0"}), \
              mock.patch("utils.xianyu_slider_stealth.XianyuSliderStealth", _FakeSlider):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}
@@ -201,6 +236,7 @@ class XianyuTokenRefreshRequestTest(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("XianyuAutoAsync.db_manager.get_cookie_details", return_value={}), \
              mock.patch("XianyuAutoAsync.log_captcha_event"), \
+             mock.patch.dict("os.environ", {"XY_SLIDER_DRISSION_FALLBACK": "0"}), \
              mock.patch("utils.xianyu_slider_stealth.XianyuSliderStealth", _FakeSlider):
             result = await live._handle_captcha_verification(
                 {"data": {"url": "https://example.com/punish?action=captcha"}}

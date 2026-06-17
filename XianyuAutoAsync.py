@@ -7504,7 +7504,7 @@ class XianyuLive:
             try:
                 # 使用集成的滑块验证方法（无需猴子补丁）
                 from utils.xianyu_slider_stealth import XianyuSliderStealth
-                from utils.slider_orchestrator import validate_slider_result
+                from utils.slider_orchestrator import run_slider_async_with_fallback
                 logger.info(f"【{self.cookie_id}】XianyuSliderStealth导入成功，使用滑块验证")
 
                 # 读取账号配置以决定浏览器模式（默认无头）
@@ -7523,8 +7523,7 @@ class XianyuLive:
                 slider_stealth.risk_trigger_scene = 'token_refresh'
 
                 # 直接使用异步方法执行滑块验证（避免 ThreadPoolExecutor 导致的 Playwright 初始化问题）
-                success, cookies = await slider_stealth.async_run(verification_url)
-                strict_result = validate_slider_result(success, cookies, engine="playwright")
+                strict_result = await run_slider_async_with_fallback(slider_stealth, verification_url, engine="playwright")
                 self.last_slider_captcha_engine = strict_result.engine
                 self.last_slider_result_message = strict_result.message
 

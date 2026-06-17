@@ -5837,7 +5837,7 @@ async def _execute_manual_cookie_import(
             XianyuSliderStealth,
             probe_cookie_verification_from_cookie,
         )
-        from utils.slider_orchestrator import run_slider_strict
+        from utils.slider_orchestrator import run_slider_with_fallback
         from XianyuAutoAsync import XianyuLive
 
         existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
@@ -6022,7 +6022,7 @@ async def _execute_manual_cookie_import(
                     )
                 log_with_user('info', f"手动导入 Cookie 已解析 verification_url: {account_id}", current_user)
 
-                strict_result = run_slider_strict(
+                strict_result = run_slider_with_fallback(
                     slider_instance,
                     target_url,
                     engine="playwright",
