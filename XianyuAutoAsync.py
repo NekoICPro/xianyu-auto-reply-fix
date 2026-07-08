@@ -12460,8 +12460,9 @@ class XianyuLive:
             if isinstance(params, str):
                 params = json.loads(params)
 
-            # 如果是POST请求且有动态参数，进行参数替换
-            if method == 'POST' and params:
+            # 有动态参数时进行替换（GET 的 query 参数同样需要，
+            # 否则 {order_id} 等占位符会原样发给对方接口）
+            if params:
                 params = await self._replace_api_dynamic_params(params, order_id, item_id, buyer_id, spec_name, spec_value)
 
             retry_info = f" (重试 {retry_count + 1}/{max_retries})" if retry_count > 0 else ""
