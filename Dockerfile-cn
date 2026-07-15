@@ -23,10 +23,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV TZ=Asia/Shanghai
 ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# Playwright 浏览器下载使用国内镜像加速
-ENV PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
 # npm 使用国内镜像加速
 ENV npm_config_registry=https://registry.npmmirror.com
+# Playwright 浏览器使用官方 CDN 下载（npmmirror 对部分 CFT 版本同步不及时会 404）
+# 官方 CDN playwright.azureedge.net 在大陆可直连
 
 # 更换为中科大（USTC）Debian 镜像源，提升大陆网络环境下的构建速度
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources

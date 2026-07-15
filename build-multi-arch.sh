@@ -68,7 +68,7 @@ BASE_IMAGE_ARG="--build-arg BASE_IMAGE=$BASE_IMAGE"
 echo "基础镜像: $BASE_IMAGE"
 echo "  - Debian apt 源: USTC (mirrors.ustc.edu.cn)"
 echo "  - PyPI 源: 清华大学 (pypi.tuna.tsinghua.edu.cn)"
-echo "  - Playwright 下载源: npmmirror (cdn.npmmirror.com)"
+echo "  - Playwright 下载源: 官方 CDN (playwright.azureedge.net)"
 echo "  - npm 源: npmmirror (registry.npmmirror.com)"
 echo
 

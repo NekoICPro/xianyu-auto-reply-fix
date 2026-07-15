@@ -50,7 +50,7 @@ source venv/bin/activate  # Windows 使用 venv\Scripts\activate
 
 pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright playwright install chromium
+playwright install chromium
 
 python Start.py
 ```

@@ -81,7 +81,7 @@ docker compose -f docker-compose-cn.yml up -d --build
 | Docker 基础镜像 | `docker.1panel.live` | 1Panel Docker 镜像源，加速拉取 `python`、`nginx` 等官方镜像 |
 | Debian apt 源 | `mirrors.ustc.edu.cn` | 中科大镜像源，加速系统依赖安装 |
 | PyPI 源 | `pypi.tuna.tsinghua.edu.cn` | 清华大学镜像源，加速 Python 依赖安装 |
-| Playwright 浏览器下载 | `cdn.npmmirror.com` | npmmirror 镜像源，加速 Chromium 下载 |
+| Playwright 浏览器下载 | 官方 CDN `playwright.azureedge.net` | 官方 CDN 在大陆可直连；npmmirror 对部分 CFT 版本同步不及时会 404 |
 | npm 源 | `registry.npmmirror.com` | npmmirror 镜像源，加速 Node.js 包安装 |
 
 ### Docker Engine 镜像加速（可选）
@@ -125,8 +125,8 @@ source venv/bin/activate  # Linux/macOS
 pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 使用国内镜像加速下载 Playwright 浏览器（大陆推荐）
-PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright playwright install chromium
+# 安装 Playwright 浏览器（官方 CDN playwright.azureedge.net 在大陆可直连）
+playwright install chromium
 # Linux 可能还需要：playwright install-deps chromium
 
 python Start.py
