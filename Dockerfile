@@ -1,7 +1,8 @@
 # 使用Python 3.11作为基础镜像
 # 支持通过构建参数指定镜像源（解决多架构构建时的网络问题）
-# 使用方法：docker build --build-arg BASE_IMAGE=ccr.ccs.tencentyun.com/dockerp/library/python:3.11-slim-bookworm
-ARG BASE_IMAGE=python:3.11-slim-bookworm
+# 默认使用 1Panel Docker 镜像源（大陆优化），海外构建可改为 python:3.11-slim-bookworm
+# 使用方法：docker build --build-arg BASE_IMAGE=python:3.11-slim-bookworm
+ARG BASE_IMAGE=docker.1panel.live/library/python:3.11-slim-bookworm
 FROM ${BASE_IMAGE}
 
 # 设置标签信息
@@ -23,9 +24,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV TZ=Asia/Shanghai
 ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Playwright 浏览器下载使用国内镜像加速
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
+# npm 使用国内镜像加速
+ENV npm_config_registry=https://registry.npmmirror.com
 
-# Use HTTPS Debian mirrors with retries; HTTP and some domestic mirrors are unreliable here.
-RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
+# 更换为中科大（USTC）Debian 镜像源，提升大陆网络环境下的构建速度
+RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 
 # 安装系统依赖（包括Playwright浏览器依赖）
 RUN apt-get -o Acquire::Retries=5 update && \

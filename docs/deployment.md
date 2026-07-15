@@ -48,7 +48,7 @@ docker-deploy.bat
 
 ## 方式二：手动使用 Docker Compose
 
-### 默认配置
+### 默认配置（已内置大陆优化）
 
 ```bash
 git clone https://github.com/GuDong2003/xianyu-auto-reply-fix.git
@@ -58,7 +58,11 @@ docker compose up -d
 
 访问：`http://localhost:9000`
 
-### 国内构建配置
+> 默认使用 1Panel Docker 镜像源 + USTC Debian 源 + 清华 PyPI 源，无需额外配置即可在大陆网络环境下快速构建。
+
+### 国内精简构建配置
+
+使用 `Dockerfile-cn` 构建的精简版镜像（不含 Xvfb/VNC/fluxbox 等虚拟显示组件，适合无头模式运行）：
 
 ```bash
 git clone https://github.com/GuDong2003/xianyu-auto-reply-fix.git
@@ -67,6 +71,45 @@ docker compose -f docker-compose-cn.yml up -d --build
 ```
 
 访问：`http://localhost:8000`
+
+## 大陆网络优化说明
+
+本项目所有 Docker 部署文件已默认配置为大陆优化版本，无需额外手动修改镜像源。构建时自动使用以下国内镜像源加速：
+
+| 资源 | 默认源 | 说明 |
+| --- | --- | --- |
+| Docker 基础镜像 | `docker.1panel.live` | 1Panel Docker 镜像源，加速拉取 `python`、`nginx` 等官方镜像 |
+| Debian apt 源 | `mirrors.ustc.edu.cn` | 中科大镜像源，加速系统依赖安装 |
+| PyPI 源 | `pypi.tuna.tsinghua.edu.cn` | 清华大学镜像源，加速 Python 依赖安装 |
+| Playwright 浏览器下载 | `cdn.npmmirror.com` | npmmirror 镜像源，加速 Chromium 下载 |
+| npm 源 | `registry.npmmirror.com` | npmmirror 镜像源，加速 Node.js 包安装 |
+
+### Docker Engine 镜像加速（可选）
+
+除了在 Dockerfile / docker-compose 中使用 1Panel 镜像源外，建议在宿主机配置 Docker Engine 镜像加速器以进一步加速镜像拉取：
+
+```jsonc
+// /etc/docker/daemon.json
+{
+  "registry-mirrors": [
+    "https://docker.1panel.live"
+  ]
+}
+```
+
+配置后重启 Docker 服务：
+
+```bash
+sudo systemctl restart docker
+```
+
+### 海外环境构建
+
+如果需要在海外环境构建，可通过构建参数覆盖为官方源：
+
+```bash
+docker build --build-arg BASE_IMAGE=python:3.11-slim-bookworm -t xianyu-auto-reply-fix .
+```
 
 ## 方式三：本地运行
 
@@ -78,9 +121,12 @@ python -m venv venv
 source venv/bin/activate  # Linux/macOS
 # venv\Scripts\activate   # Windows
 
-pip install --upgrade pip
-pip install -r requirements.txt
-playwright install chromium
+# 使用国内 PyPI 镜像源加速安装（大陆推荐）
+pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 使用国内镜像加速下载 Playwright 浏览器（大陆推荐）
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright playwright install chromium
 # Linux 可能还需要：playwright install-deps chromium
 
 python Start.py

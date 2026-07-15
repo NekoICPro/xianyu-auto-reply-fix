@@ -4,14 +4,15 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        BASE_IMAGE: python:3.11-slim-bookworm
+        # 默认使用 1Panel Docker 镜像源加速拉取（大陆优化）
+        BASE_IMAGE: docker.1panel.live/library/python:3.11-slim-bookworm
         HTTP_PROXY: ${HTTP_PROXY}
         HTTPS_PROXY: ${HTTPS_PROXY}
         NO_PROXY: ${NO_PROXY}
         http_proxy: ${HTTP_PROXY}
         https_proxy: ${HTTPS_PROXY}
         no_proxy: ${NO_PROXY}
-    image: ghcr.io/gudong2003/xianyu-auto-reply-fix:latest
+    image: xianyu-auto-reply-fix:latest
     container_name: xianyu-auto-reply-fix
     restart: unless-stopped
     # 内置 init 进程回收僵尸进程（chrome 子进程退出后无人 reap 会变 defunct，长期累积）
@@ -101,7 +102,7 @@ services:
 
   # 可选：添加Nginx反向代理
   nginx:
-    image: nginx:alpine
+    image: docker.1panel.live/library/nginx:alpine
     container_name: xianyu-nginx
     restart: unless-stopped
     ports:

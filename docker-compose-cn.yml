@@ -91,7 +91,7 @@ services:
 
   # 可选：添加Nginx反向代理
   nginx:
-    image: nginx:alpine
+    image: docker.1panel.live/library/nginx:alpine
     container_name: xianyu-nginx
     restart: unless-stopped
     ports:

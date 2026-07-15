@@ -61,20 +61,26 @@ echo "[✓] Docker 服务正常运行"
 
 echo
 echo "========================================"
-echo "步骤 2: 基础镜像源配置"
+echo "步骤 2: 基础镜像源配置（大陆优化 - 1Panel Docker 镜像源）"
 echo "========================================"
 BASE_IMAGE="docker.1panel.live/library/python:3.11-slim-bookworm"
 BASE_IMAGE_ARG="--build-arg BASE_IMAGE=$BASE_IMAGE"
 echo "基础镜像: $BASE_IMAGE"
+echo "  - Debian apt 源: USTC (mirrors.ustc.edu.cn)"
+echo "  - PyPI 源: 清华大学 (pypi.tuna.tsinghua.edu.cn)"
+echo "  - Playwright 下载源: npmmirror (cdn.npmmirror.com)"
+echo "  - npm 源: npmmirror (registry.npmmirror.com)"
 echo
 
 echo "========================================"
 echo "步骤 3: 安装 QEMU 模拟器（支持 ARM64）"
 echo "========================================"
 echo "检查 QEMU 是否已安装..."
-if docker run --rm --privileged tonistiigi/binfmt --version >/dev/null 2>&1; then
+# 使用 1Panel 镜像源拉取 binfmt 镜像（大陆加速）
+BINFMT_IMAGE="docker.1panel.live/tonistiigi/binfmt"
+if docker run --rm --privileged ${BINFMT_IMAGE} --version >/dev/null 2>&1; then
     echo "安装/更新 QEMU 模拟器..."
-    docker run --rm --privileged tonistiigi/binfmt --install all
+    docker run --rm --privileged ${BINFMT_IMAGE} --install all
     if [ $? -eq 0 ]; then
         echo "[✓] QEMU 模拟器安装成功"
     else
