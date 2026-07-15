@@ -8643,10 +8643,13 @@ function renderCardsList(cards) {
         case 'data':
         typeBadge = '<span class="badge bg-warning">批量数据</span>';
         break;
-        case 'image':
-        typeBadge = '<span class="badge bg-primary">图片</span>';
-        break;
-    }
+case 'image':
+typeBadge = '<span class="badge bg-primary">图片</span>';
+break;
+case 'image_data':
+typeBadge = '<span class="badge bg-info">图片卡密</span>';
+break;
+}
 
     // 状态标签
     const statusBadge = card.enabled ?
@@ -8718,12 +8721,15 @@ function updateCardsStats(cards) {
     const totalCards = cards.length;
     const apiCards = cards.filter(card => card.type === 'api').length;
     const textCards = cards.filter(card => card.type === 'text').length;
-    const dataCards = cards.filter(card => card.type === 'data').length;
+const dataCards = cards.filter(card => card.type === 'data').length;
+const imageDataCards = cards.filter(card => card.type === 'image_data').length;
 
-    document.getElementById('totalCards').textContent = totalCards;
-    document.getElementById('apiCards').textContent = apiCards;
-    document.getElementById('textCards').textContent = textCards;
-    document.getElementById('dataCards').textContent = dataCards;
+document.getElementById('totalCards').textContent = totalCards;
+document.getElementById('apiCards').textContent = apiCards;
+document.getElementById('textCards').textContent = textCards;
+document.getElementById('dataCards').textContent = dataCards;
+const imageDataEl = document.getElementById('imageDataCards');
+if (imageDataEl) imageDataEl.textContent = imageDataCards;
 }
 
 // 显示添加卡券模态框
@@ -8751,6 +8757,7 @@ function toggleCardTypeFields() {
     setDisplay('textFields', cardType === 'text');
     setDisplay('dataFields', cardType === 'data');
     setDisplay('imageFields', cardType === 'image');
+    setDisplay('imageDataFields', cardType === 'image_data');
 
     // 如果是API类型，初始化API方法监听
     if (cardType === 'api') {
@@ -9279,6 +9286,9 @@ async function saveCard() {
         const uploadResult = await uploadResponse.json();
         cardData.image_url = uploadResult.image_url;
         break;
+        case 'image_data':
+        // 图片卡密类型：先创建卡券，后续再上传图片卡密
+        break;
     }
 
     // 获取"生成对应发货规则"开关状态
@@ -9395,10 +9405,13 @@ function renderDeliveryRulesList(rules) {
         case 'data':
             cardTypeBadge = '<span class="badge bg-warning">批量数据</span>';
             break;
-        case 'image':
-            cardTypeBadge = '<span class="badge bg-primary">图片</span>';
-            break;
-        }
+case 'image':
+cardTypeBadge = '<span class="badge bg-primary">图片</span>';
+break;
+case 'image_data':
+cardTypeBadge = '<span class="badge bg-info">图片卡密</span>';
+break;
+}
     }
 
     tr.innerHTML = `
@@ -9520,6 +9533,9 @@ async function loadCardsForSelect() {
                     break;
                 case 'image':
                     typeText = '图片';
+                    break;
+                case 'image_data':
+                    typeText = '图片卡密';
                     break;
                 default:
                     typeText = '未知类型';
@@ -9668,6 +9684,9 @@ async function editCard(cardId) {
         // 清空文件选择器和预览
         document.getElementById('editCardImageFile').value = '';
         document.getElementById('editCardImagePreview').style.display = 'none';
+        } else if (card.type === 'image_data') {
+        // 加载图片卡密列表
+        loadImageCardList(card.id);
         }
 
         // 显示对应的字段
@@ -9707,6 +9726,7 @@ function toggleEditCardTypeFields() {
     document.getElementById('editTextFields').style.display = cardType === 'text' ? 'block' : 'none';
     document.getElementById('editDataFields').style.display = cardType === 'data' ? 'block' : 'none';
     document.getElementById('editImageFields').style.display = cardType === 'image' ? 'block' : 'none';
+    document.getElementById('editImageDataFields').style.display = cardType === 'image_data' ? 'block' : 'none';
 
     // 如果是API类型，初始化API方法监听
     if (cardType === 'api') {
@@ -9857,6 +9877,9 @@ async function updateCard() {
         }
         // 没有新图片，保持原有配置，继续正常更新流程
         break;
+        case 'image_data':
+        // 图片卡密类型：无需额外数据，图片通过专用接口管理
+        break;
     }
 
     const response = await fetch(`${apiBase}/cards/${cardId}`, {
@@ -9957,6 +9980,120 @@ async function deleteCard(cardId) {
     }
 }
 
+// ==================== 图片卡密管理 ====================
+
+let currentImageCardId = null;
+
+// 加载图片卡密列表
+async function loadImageCardList(cardId) {
+    currentImageCardId = cardId;
+    try {
+        const response = await fetch(`${apiBase}/cards/${cardId}/image-cards?page=1&page_size=100`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+
+        // 更新统计
+        const stats = data.stats || {};
+        document.getElementById('imgCardTotal').textContent = stats.total || 0;
+        document.getElementById('imgCardAvailable').textContent = stats.available || 0;
+        document.getElementById('imgCardSent').textContent = stats.sent || 0;
+        document.getElementById('imgCardConsumed').textContent = stats.consumed || 0;
+
+        // 渲染列表
+        const tbody = document.getElementById('imageCardTableBody');
+        tbody.innerHTML = '';
+        const items = data.items || [];
+        if (items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">暂无图片卡密，请点击"上传图片卡密"按钮上传</td></tr>';
+            return;
+        }
+
+        const statusMap = {
+            'available': '<span class="badge bg-success">可用</span>',
+            'reserved': '<span class="badge bg-warning">预占中</span>',
+            'sent': '<span class="badge bg-info">已发送</span>',
+            'consumed': '<span class="badge bg-secondary">已消费</span>',
+        };
+
+        items.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><img src="${item.image_url}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer;" onclick="window.open('${item.image_url}', '_blank')"></td>
+                <td>${statusMap[item.status] || item.status}</td>
+                <td>${item.order_id ? item.order_id.substring(0, 12) + '...' : '-'}</td>
+                <td><small>${item.created_at || '-'}</small></td>
+                <td>${item.status === 'available' ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteImageCard(${item.id})"><i class="bi bi-trash"></i></button>` : ''}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (error) {
+        console.error('加载图片卡密列表失败:', error);
+    }
+}
+
+// 上传图片卡密
+async function uploadImageCards() {
+    if (!currentImageCardId) {
+        showToast('请先选择卡券', 'warning');
+        return;
+    }
+    const fileInput = document.getElementById('editImageDataFiles');
+    fileInput.click();
+    fileInput.onchange = async function() {
+        const files = fileInput.files;
+        if (!files || files.length === 0) return;
+
+        const formData = new FormData();
+        for (let i = 0; i < files.length; i++) {
+            formData.append('images', files[i]);
+        }
+
+        showToast('正在上传图片卡密...', 'info');
+        try {
+            const response = await fetch(`${apiBase}/cards/${currentImageCardId}/image-cards`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${authToken}` },
+                body: formData
+            });
+            if (response.ok) {
+                const result = await response.json();
+                showToast(`成功上传 ${result.count} 张图片卡密`, 'success');
+                fileInput.value = '';
+                loadImageCardList(currentImageCardId);
+            } else {
+                const error = await response.json();
+                showToast(`上传失败: ${error.detail || '未知错误'}`, 'danger');
+            }
+        } catch (error) {
+            console.error('上传图片卡密失败:', error);
+            showToast('上传图片卡密失败', 'danger');
+        }
+    };
+}
+
+// 删除图片卡密
+async function deleteImageCard(itemId) {
+    if (!confirm('确定要删除这张图片卡密吗？')) return;
+    try {
+        const response = await fetch(`${apiBase}/image-cards/${itemId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (response.ok) {
+            showToast('图片卡密删除成功', 'success');
+            loadImageCardList(currentImageCardId);
+        } else {
+            const error = await response.json();
+            showToast(`删除失败: ${error.detail || '未知错误'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('删除图片卡密失败:', error);
+        showToast('删除图片卡密失败', 'danger');
+    }
+}
+
 // 编辑发货规则
 async function editDeliveryRule(ruleId) {
     try {
@@ -10031,6 +10168,9 @@ async function loadCardsForEditSelect() {
                     break;
                 case 'image':
                     typeText = '图片';
+                    break;
+                case 'image_data':
+                    typeText = '图片卡密';
                     break;
                 default:
                     typeText = '未知类型';

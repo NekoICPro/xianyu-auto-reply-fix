@@ -490,7 +490,7 @@ class DBManager:
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image')),
+                type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image', 'image_data')),
                 api_config TEXT,
                 text_content TEXT,
                 data_content TEXT,
@@ -728,6 +728,29 @@ class DBManager:
             self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_data_card_reservations_card_status ON data_card_reservations(card_id, status)")
             self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_data_card_reservations_order_status ON data_card_reservations(order_id, status)")
             self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_data_card_reservations_card_order_unit ON data_card_reservations(card_id, order_id, unit_index)")
+
+            # 创建图片卡密表（image_data 类型卡券专用，每张图片是一个独立卡密）
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_card_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER NOT NULL,
+                image_url TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'available',
+                order_id TEXT,
+                buyer_id TEXT,
+                cookie_id TEXT,
+                unit_index INTEGER NOT NULL DEFAULT 1,
+                reserved_at TIMESTAMP,
+                sent_at TIMESTAMP,
+                consumed_at TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
+            )
+            ''')
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_image_card_items_card_status ON image_card_items(card_id, status)")
+            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_image_card_items_order ON image_card_items(order_id)")
 
             # 创建默认回复表
             cursor.execute('''
@@ -1293,7 +1316,7 @@ Cookie数量: {cookie_count}
         self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_publish_logs_account_status ON publish_logs(account_id, status, created_at DESC)")
 
     def _update_cards_table_constraints(self, cursor):
-        """更新cards表的CHECK约束以支持image和yifan_api类型"""
+        """更新cards表的CHECK约束以支持image、yifan_api和image_data类型"""
         try:
             # 尝试插入一个测试的yifan_api类型记录来检查约束
             cursor.execute('''
@@ -1303,6 +1326,18 @@ Cookie数量: {cookie_count}
             # 如果插入成功，立即删除测试记录
             cursor.execute("DELETE FROM cards WHERE name = '__test_yifan_constraint__'")
             logger.info("cards表约束检查通过，支持yifan_api类型")
+            
+            # 再测试image_data类型
+            try:
+                cursor.execute('''
+                    INSERT INTO cards (name, type, user_id)
+                    VALUES ('__test_image_data_constraint__', 'image_data', 1)
+                ''')
+                cursor.execute("DELETE FROM cards WHERE name = '__test_image_data_constraint__'")
+                logger.info("cards表约束检查通过，支持image_data类型")
+            except Exception as e2:
+                if "CHECK constraint failed" in str(e2) or "constraint" in str(e2).lower():
+                    raise e2  # 触发下面的重建逻辑
         except Exception as e:
             if "CHECK constraint failed" in str(e) or "constraint" in str(e).lower():
                 logger.info("检测到旧的CHECK约束，开始更新cards表以支持yifan_api类型...")
@@ -1314,7 +1349,7 @@ Cookie数量: {cookie_count}
                     CREATE TABLE IF NOT EXISTS cards_new (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL,
-                        type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image')),
+                        type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image', 'image_data')),
                         api_config TEXT,
                         text_content TEXT,
                         data_content TEXT,
@@ -6018,6 +6053,261 @@ Cookie数量: {cookie_count}
             except Exception as e:
                 logger.error(f"恢复超时批量数据预占失败: {e}")
                 return 0
+
+    # ==================== 图片卡密（image_data）管理方法 ====================
+
+    def add_image_card_items(self, card_id: int, image_urls: list):
+        """批量添加图片卡密条目"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                for url in image_urls:
+                    self._execute_sql(cursor, '''
+                    INSERT INTO image_card_items (card_id, image_url, status)
+                    VALUES (?, ?, 'available')
+                    ''', (card_id, url))
+                self.conn.commit()
+                count = len(image_urls)
+                logger.info(f"批量添加图片卡密成功: card_id={card_id}, 数量={count}")
+                return count
+            except Exception as e:
+                logger.error(f"批量添加图片卡密失败: card_id={card_id}, error={e}")
+                self.conn.rollback()
+                raise
+
+    def get_image_card_items(self, card_id: int, page: int = 1, page_size: int = 50):
+        """获取图片卡密列表（分页）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                offset = (page - 1) * page_size
+                self._execute_sql(cursor, '''
+                SELECT id, card_id, image_url, status, order_id, buyer_id, cookie_id,
+                       unit_index, reserved_at, sent_at, consumed_at, last_error,
+                       created_at, updated_at
+                FROM image_card_items
+                WHERE card_id = ?
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                ''', (card_id, page_size, offset))
+                rows = cursor.fetchall()
+                items = []
+                for row in rows:
+                    items.append({
+                        'id': row[0], 'card_id': row[1], 'image_url': row[2],
+                        'status': row[3], 'order_id': row[4], 'buyer_id': row[5],
+                        'cookie_id': row[6], 'unit_index': row[7],
+                        'reserved_at': row[8], 'sent_at': row[9], 'consumed_at': row[10],
+                        'last_error': row[11], 'created_at': row[12], 'updated_at': row[13],
+                    })
+                return items
+            except Exception as e:
+                logger.error(f"获取图片卡密列表失败: card_id={card_id}, error={e}")
+                return []
+
+    def get_image_card_stats(self, card_id: int):
+        """获取图片卡密统计信息"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, '''
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) as available,
+                    SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END) as reserved,
+                    SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent,
+                    SUM(CASE WHEN status = 'consumed' THEN 1 ELSE 0 END) as consumed
+                FROM image_card_items
+                WHERE card_id = ?
+                ''', (card_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return {'total': 0, 'available': 0, 'reserved': 0, 'sent': 0, 'consumed': 0}
+                return {
+                    'total': row[0] or 0,
+                    'available': row[1] or 0,
+                    'reserved': row[2] or 0,
+                    'sent': row[3] or 0,
+                    'consumed': row[4] or 0,
+                }
+            except Exception as e:
+                logger.error(f"获取图片卡密统计失败: card_id={card_id}, error={e}")
+                return {'total': 0, 'available': 0, 'reserved': 0, 'sent': 0, 'consumed': 0}
+
+    def delete_image_card_item(self, item_id: int):
+        """删除单个图片卡密条目（仅允许删除 available 状态的）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT status FROM image_card_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                if row[0] not in ('available',):
+                    logger.warning(f"图片卡密状态不允许删除: item_id={item_id}, status={row[0]}")
+                    return False
+                self._execute_sql(cursor, "DELETE FROM image_card_items WHERE id = ?", (item_id,))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"删除图片卡密失败: item_id={item_id}, error={e}")
+                self.conn.rollback()
+                return False
+
+    def reserve_image_card(self, card_id: int, order_id: str, unit_index: int = 1,
+                           cookie_id: str = None, buyer_id: str = None):
+        """原子预占一张可用的图片卡密，避免并发订单拿到同一张"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+
+                # 先检查是否已有同一订单同一 unit 的预占记录
+                self._execute_sql(cursor, '''
+                SELECT id, card_id, image_url, status, order_id, buyer_id, cookie_id, unit_index
+                FROM image_card_items
+                WHERE card_id = ? AND order_id = ? AND unit_index = ?
+                  AND status IN ('reserved', 'sent', 'consumed')
+                ORDER BY id DESC LIMIT 1
+                ''', (card_id, order_id, unit_index))
+                existing = cursor.fetchone()
+                if existing:
+                    logger.info(f"复用图片卡密预占记录: card_id={card_id}, order_id={order_id}, unit_index={unit_index}")
+                    return {
+                        'id': existing[0],
+                        'card_id': existing[1],
+                        'image_url': existing[2],
+                        'status': existing[3],
+                        'order_id': existing[4],
+                        'buyer_id': existing[5],
+                        'cookie_id': existing[6],
+                        'unit_index': existing[7],
+                    }
+
+                # 原子取一张 available 的图片
+                self._execute_sql(cursor, '''
+                SELECT id, image_url FROM image_card_items
+                WHERE card_id = ? AND status = 'available'
+                ORDER BY id ASC LIMIT 1
+                ''', (card_id,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"图片卡密 {card_id} 没有可用图片")
+                    return None
+
+                item_id, image_url = row[0], row[1]
+
+                # 标记为 reserved
+                self._execute_sql(cursor, '''
+                UPDATE image_card_items
+                SET status = 'reserved', order_id = ?, buyer_id = ?, cookie_id = ?,
+                    unit_index = ?, reserved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'available'
+                ''', (order_id, buyer_id, cookie_id, unit_index, item_id))
+
+                if cursor.rowcount == 0:
+                    # 并发竞争失败，重试一次
+                    logger.warning(f"图片卡密预占竞争失败，重试: card_id={card_id}")
+                    return self.reserve_image_card(card_id, order_id, unit_index, cookie_id, buyer_id)
+
+                self.conn.commit()
+                logger.info(f"图片卡密预占成功: card_id={card_id}, order_id={order_id}, item_id={item_id}")
+                return {
+                    'id': item_id,
+                    'card_id': card_id,
+                    'image_url': image_url,
+                    'status': 'reserved',
+                    'order_id': order_id,
+                    'buyer_id': buyer_id,
+                    'cookie_id': cookie_id,
+                    'unit_index': unit_index,
+                }
+            except Exception as e:
+                logger.error(f"预占图片卡密失败: card_id={card_id}, order_id={order_id}, error={e}")
+                self.conn.rollback()
+                return None
+
+    def mark_image_card_sent(self, item_id: int):
+        """标记图片卡密已发送成功"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT status FROM image_card_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                current_status = row[0]
+                if current_status in ('sent', 'consumed'):
+                    return True
+                if current_status != 'reserved':
+                    logger.warning(f"图片卡密状态不允许标记已发送: item_id={item_id}, status={current_status}")
+                    return False
+                self._execute_sql(cursor, '''
+                UPDATE image_card_items
+                SET status = 'sent', sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''', (item_id,))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"标记图片卡密已发送失败: item_id={item_id}, error={e}")
+                self.conn.rollback()
+                return False
+
+    def finalize_image_card(self, item_id: int):
+        """完成图片卡密，进入 consumed 状态"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT status FROM image_card_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return {'success': False, 'already_finalized': False}
+                current_status = row[0]
+                if current_status == 'consumed':
+                    return {'success': True, 'already_finalized': True}
+                if current_status not in ('reserved', 'sent'):
+                    logger.warning(f"图片卡密状态不允许 finalize: item_id={item_id}, status={current_status}")
+                    return {'success': False, 'already_finalized': False}
+                self._execute_sql(cursor, '''
+                UPDATE image_card_items
+                SET status = 'consumed', consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''', (item_id,))
+                self.conn.commit()
+                return {'success': True, 'already_finalized': False}
+            except Exception as e:
+                logger.error(f"完成图片卡密失败: item_id={item_id}, error={e}")
+                self.conn.rollback()
+                return {'success': False, 'already_finalized': False}
+
+    def release_image_card(self, item_id: int, error: str = None):
+        """释放未发送成功的图片卡密，恢复为 available"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT status FROM image_card_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                current_status = row[0]
+                if current_status in ('available',):
+                    return True
+                if current_status in ('sent', 'consumed'):
+                    logger.warning(f"图片卡密已发送或已完成，不能释放: item_id={item_id}, status={current_status}")
+                    return False
+                self._execute_sql(cursor, '''
+                UPDATE image_card_items
+                SET status = 'available', order_id = NULL, buyer_id = NULL, cookie_id = NULL,
+                    reserved_at = NULL, last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''', (error, item_id))
+                self.conn.commit()
+                logger.info(f"释放图片卡密成功: item_id={item_id}")
+                return True
+            except Exception as e:
+                logger.error(f"释放图片卡密失败: item_id={item_id}, error={e}")
+                self.conn.rollback()
+                return False
 
     def peek_batch_data(self, card_id: int, line_index: int = 0):
         """预览批量数据指定位置的记录，不执行消费。"""

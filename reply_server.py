@@ -10014,6 +10014,113 @@ def delete_card(card_id: int, current_user: Dict[str, Any] = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 图片卡密管理 API ====================
+
+@app.post("/cards/{card_id}/image-cards")
+async def upload_image_cards(
+    card_id: int,
+    images: List[UploadFile] = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """批量上传图片卡密"""
+    try:
+        from db_manager import db_manager
+        user_id = current_user['user_id']
+
+        # 验证卡券归属权和类型
+        cards = db_manager.get_all_cards(user_id)
+        card = next((c for c in cards if c['id'] == card_id), None)
+        if not card:
+            raise HTTPException(status_code=404, detail="卡券不存在或无权限")
+        if card['type'] != 'image_data':
+            raise HTTPException(status_code=400, detail="仅图片卡密类型卡券支持此操作")
+
+        image_urls = []
+        for img in images:
+            if not img.content_type or not img.content_type.startswith('image/'):
+                continue
+            image_data = await img.read()
+            image_url = image_manager.save_image(image_data, img.filename)
+            if image_url:
+                image_urls.append(image_url)
+
+        if not image_urls:
+            raise HTTPException(status_code=400, detail="没有有效的图片文件")
+
+        count = db_manager.add_image_card_items(card_id, image_urls)
+        logger.info(f"批量上传图片卡密成功: card_id={card_id}, 数量={count}")
+        return {"message": f"成功上传 {count} 张图片卡密", "count": count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"上传图片卡密失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/cards/{card_id}/image-cards")
+def get_image_cards(
+    card_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取图片卡密列表"""
+    try:
+        from db_manager import db_manager
+        user_id = current_user['user_id']
+
+        cards = db_manager.get_all_cards(user_id)
+        card = next((c for c in cards if c['id'] == card_id), None)
+        if not card:
+            raise HTTPException(status_code=404, detail="卡券不存在或无权限")
+
+        items = db_manager.get_image_card_items(card_id, page, page_size)
+        stats = db_manager.get_image_card_stats(card_id)
+        return {"items": items, "stats": stats, "page": page, "page_size": page_size}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/cards/{card_id}/image-card-stats")
+def get_image_card_stats_api(
+    card_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取图片卡密统计"""
+    try:
+        from db_manager import db_manager
+        user_id = current_user['user_id']
+
+        cards = db_manager.get_all_cards(user_id)
+        card = next((c for c in cards if c['id'] == card_id), None)
+        if not card:
+            raise HTTPException(status_code=404, detail="卡券不存在或无权限")
+
+        return db_manager.get_image_card_stats(card_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/image-cards/{item_id}")
+def delete_image_card(item_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """删除单个图片卡密"""
+    try:
+        from db_manager import db_manager
+        success = db_manager.delete_image_card_item(item_id)
+        if success:
+            return {"message": "图片卡密删除成功"}
+        else:
+            raise HTTPException(status_code=400, detail="图片卡密不存在或状态不允许删除")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/delivery-rules/{rule_id}")
 def delete_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """删除发货规则"""

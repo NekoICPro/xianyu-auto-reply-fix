@@ -1777,6 +1777,12 @@
                     <span class="badge bg-warning" id="dataCards">0</span>
                   </div>
                 </div>
+                <div class="stat-item mt-3">
+                  <div class="d-flex justify-content-between">
+                    <span>图片卡密</span>
+                    <span class="badge bg-info" id="imageDataCards">0</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -4348,6 +4354,7 @@
                 <option value="text">固定文字</option>
                 <option value="data">批量数据</option>
                 <option value="image">图片</option>
+                <option value="image_data">图片卡密</option>
               </select>
             </div>
 
@@ -4548,6 +4555,30 @@
               </div>
             </div>
 
+            <!-- 图片卡密配置 -->
+            <div id="imageDataFields" class="card mb-3" style="display: none;">
+              <div class="card-header">
+                <h6 class="mb-0">图片卡密配置</h6>
+              </div>
+              <div class="card-body">
+                <div class="alert alert-info">
+                  <small>
+                    <i class="bi bi-lightbulb me-1"></i>
+                    <strong>使用说明：</strong>创建卡券后，在卡券列表中点击"管理图片卡密"按钮，批量上传包含卡密的图片。每次自动发货会发送一张未使用过的图片，发过的图片不会重复发送。
+                  </small>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">批量上传图片卡密 <span class="text-danger">*</span></label>
+                  <input type="file" class="form-control" id="imageDataFiles" accept="image/*" multiple>
+                  <small class="form-text text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    支持多选，可一次选择多张图片。每张图片作为一个独立卡密，发货时自动取一张未发送的图片发送。支持JPG、PNG、GIF格式。
+                  </small>
+                </div>
+                <div id="imageDataPreview" class="row g-2"></div>
+              </div>
+            </div>
+
             <div class="mb-3">
               <label class="form-label">延时发货时间</label>
               <div class="input-group">
@@ -4668,13 +4699,14 @@
             </div>
             <div class="mb-3">
               <label class="form-label">卡券类型 <span class="text-danger">*</span></label>
-              <select class="form-select" id="editCardType" onchange="toggleEditCardTypeFields()" required>
-                <option value="api">API接口</option>
-                <option value="yifan_api">亦凡API</option>
-                <option value="text">固定文字</option>
-                <option value="data">批量数据</option>
-                <option value="image">图片</option>
-              </select>
+<select class="form-select" id="editCardType" onchange="toggleEditCardTypeFields()" required>
+<option value="api">API接口</option>
+<option value="yifan_api">亦凡API</option>
+<option value="text">固定文字</option>
+<option value="data">批量数据</option>
+<option value="image">图片</option>
+<option value="image_data">图片卡密</option>
+</select>
             </div>
 
             <!-- API配置 -->
@@ -4884,6 +4916,60 @@
                     <img id="editCardPreviewImg" src="" alt="预览图片"
                          style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid #ddd;">
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 图片卡密管理 -->
+            <div id="editImageDataFields" class="card mb-3" style="display: none;">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0">图片卡密管理</h6>
+                <button type="button" class="btn btn-sm btn-primary" onclick="uploadImageCards()">
+                  <i class="bi bi-upload me-1"></i>上传图片卡密
+                </button>
+              </div>
+              <div class="card-body">
+                <div class="row mb-3">
+                  <div class="col-md-3">
+                    <div class="stat-item">
+                      <small class="text-muted d-block">总数</small>
+                      <span class="badge bg-primary" id="imgCardTotal">0</span>
+                    </div>
+                  </div>
+                  <div class="col-md-3">
+                    <div class="stat-item">
+                      <small class="text-muted d-block">可用</small>
+                      <span class="badge bg-success" id="imgCardAvailable">0</span>
+                    </div>
+                  </div>
+                  <div class="col-md-3">
+                    <div class="stat-item">
+                      <small class="text-muted d-block">已发送</small>
+                      <span class="badge bg-info" id="imgCardSent">0</span>
+                    </div>
+                  </div>
+                  <div class="col-md-3">
+                    <div class="stat-item">
+                      <small class="text-muted d-block">已消费</small>
+                      <span class="badge bg-secondary" id="imgCardConsumed">0</span>
+                    </div>
+                  </div>
+                </div>
+                <input type="file" class="form-control mb-3" id="editImageDataFiles" accept="image/*" multiple style="display:none;">
+                <div id="imageCardList" class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>图片</th>
+                        <th>状态</th>
+                        <th>订单</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="imageCardTableBody">
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>

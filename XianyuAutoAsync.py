@@ -3548,6 +3548,17 @@ class XianyuLive:
         reservation_id = meta.get('data_reservation_id')
         reservation_already_finalized = False
 
+        # 图片卡密消费
+        image_card_consume_required = bool(meta.get('image_card_pending_consume'))
+        image_card_reservation_id = meta.get('image_card_reservation_id')
+        if image_card_consume_required and image_card_reservation_id:
+            img_finalize_state = db_manager.finalize_image_card(image_card_reservation_id)
+            if not img_finalize_state.get('success'):
+                return {
+                    'success': False,
+                    'error': '图片卡密完成失败，已中止后续确认发货'
+                }
+
         if consume_required:
             if reservation_id:
                 finalize_state = db_manager.finalize_batch_data_reservation(reservation_id)
@@ -3640,6 +3651,26 @@ class XianyuLive:
 
         from db_manager import db_manager
         return db_manager.release_batch_data_reservation(reservation_id, error=error)
+
+    def _mark_image_card_sent_if_needed(self, delivery_meta: dict = None) -> bool:
+        """图片卡密发送成功后标记为已发送"""
+        meta = delivery_meta or {}
+        image_card_id = meta.get('image_card_reservation_id')
+        if not image_card_id:
+            return True
+
+        from db_manager import db_manager
+        return db_manager.mark_image_card_sent(image_card_id)
+
+    def _release_image_card_if_needed(self, delivery_meta: dict = None, error: str = None) -> bool:
+        """释放未发送成功的图片卡密预占"""
+        meta = delivery_meta or {}
+        image_card_id = meta.get('image_card_reservation_id')
+        if not image_card_id:
+            return True
+
+        from db_manager import db_manager
+        return db_manager.release_image_card(image_card_id, error=error)
 
     def _get_pending_delivery_finalization_meta(self, order_id: str, delivery_unit_index: int = 1):
         if not order_id:
@@ -4849,6 +4880,10 @@ class XianyuLive:
                     self._release_data_reservation_if_needed(delivery_meta, error='补偿发货发送成功后标记预占已发送失败')
                     raise Exception('批量数据预占标记已发送失败')
 
+                if not self._mark_image_card_sent_if_needed(delivery_meta):
+                    self._release_image_card_if_needed(delivery_meta, error='补偿发货发送成功后标记图片卡密已发送失败')
+                    raise Exception('图片卡密标记已发送失败')
+
                 self._persist_delivery_finalization_state(
                     order_id=order_id,
                     item_id=item_id,
@@ -4912,6 +4947,7 @@ class XianyuLive:
                 return True
             except Exception as send_error:
                 self._release_data_reservation_if_needed(delivery_meta, error=self._safe_str(send_error))
+                self._release_image_card_if_needed(delivery_meta, error=self._safe_str(send_error))
                 self._persist_delivery_finalization_state(
                     order_id=order_id,
                     item_id=item_id,
@@ -5733,6 +5769,13 @@ class XianyuLive:
                             )
                             raise Exception('批量数据预占标记已发送失败')
 
+                        if not self._mark_image_card_sent_if_needed(delivery_result if isinstance(delivery_result, dict) else delivery_rule_meta):
+                            self._release_image_card_if_needed(
+                                delivery_result if isinstance(delivery_result, dict) else delivery_rule_meta,
+                                error='发送成功后标记图片卡密已发送失败'
+                            )
+                            raise Exception('图片卡密标记已发送失败')
+
                         self._persist_delivery_finalization_state(
                             order_id=order_id,
                             item_id=item_id,
@@ -5859,6 +5902,10 @@ class XianyuLive:
 
         except Exception as e:
             self._release_data_reservation_if_needed(
+                delivery_result if 'delivery_result' in locals() and isinstance(delivery_result, dict) else delivery_rule_meta if 'delivery_rule_meta' in locals() else None,
+                error=f'自动发货发送失败: {self._safe_str(e)}'
+            )
+            self._release_image_card_if_needed(
                 delivery_result if 'delivery_result' in locals() and isinstance(delivery_result, dict) else delivery_rule_meta if 'delivery_rule_meta' in locals() else None,
                 error=f'自动发货发送失败: {self._safe_str(e)}'
             )
@@ -6354,6 +6401,7 @@ class XianyuLive:
                                 failure_reason = f"第 {unit_index}/{quantity_to_send} 个卡券发货步骤构建失败"
                                 last_delivery_error = failure_reason
                                 self._release_data_reservation_if_needed(rule_meta, error=failure_reason)
+            self._release_image_card_if_needed(rule_meta, error=failure_reason)
                                 self._record_delivery_log(
                                     order_id=order_id,
                                     item_id=item_id,
@@ -6376,6 +6424,7 @@ class XianyuLive:
 
                         except Exception as e:
                             self._release_data_reservation_if_needed(rule_meta, error=f'准备发货失败: {self._safe_str(e)}')
+            self._release_image_card_if_needed(rule_meta, error=f'准备发货失败: {self._safe_str(e)}')
                             last_delivery_error = f"准备第 {unit_index}/{quantity_to_send} 个卡券失败: {self._safe_str(e)}"
                             self._record_delivery_log(
                                 order_id=order_id,
@@ -6423,10 +6472,14 @@ class XianyuLive:
                             for prepared_unit in group_units:
                                 unit_rule_meta = prepared_unit.get('rule_meta') or {}
                                 unit_index = prepared_unit.get('unit_index') or 1
-                                self._release_data_reservation_if_needed(
-                                    unit_rule_meta,
-                                    error=f'发送失败(unit={unit_index}): {group_error}'
-                                )
+            self._release_data_reservation_if_needed(
+                unit_rule_meta,
+                error=f'发送失败(unit={unit_index}): {group_error}'
+            )
+            self._release_image_card_if_needed(
+                unit_rule_meta,
+                error=f'发送失败(unit={unit_index}): {group_error}'
+            )
                                 last_delivery_error = f"发送第 {unit_index}/{quantity_to_send} 个卡券失败: {group_error}"
                                 self._record_delivery_log(
                                     order_id=order_id,
@@ -6453,6 +6506,25 @@ class XianyuLive:
                                         error=f'发送成功后标记预占已发送失败(unit={unit_index})'
                                     )
                                     last_delivery_error = f'第 {unit_index} 个卡券发送成功后标记预占已发送失败'
+                                    self._record_delivery_log(
+                                        order_id=order_id,
+                                        item_id=item_id,
+                                        buyer_id=send_user_id,
+                                        buyer_nick=send_user_name,
+                                        status='failed',
+                                        reason=last_delivery_error,
+                                        channel='auto',
+                                        rule_meta=unit_rule_meta
+                                    )
+                                    logger.error(last_delivery_error)
+                                    continue
+
+                                if not self._mark_image_card_sent_if_needed(unit_rule_meta):
+                                    self._release_image_card_if_needed(
+                                        unit_rule_meta,
+                                        error=f'发送成功后标记图片卡密已发送失败(unit={unit_index})'
+                                    )
+                                    last_delivery_error = f'第 {unit_index} 个图片卡密发送成功后标记已发送失败'
                                     self._record_delivery_log(
                                         order_id=order_id,
                                         item_id=item_id,
@@ -12142,6 +12214,7 @@ class XianyuLive:
                 delivery_content = None
                 data_line = None
                 data_reservation = None
+                image_card_reservation = None
 
                 # 根据卡券类型处理发货内容
                 if rule['card_type'] == 'api':
@@ -12181,6 +12254,23 @@ class XianyuLive:
                         logger.error(f"图片卡券缺少图片URL: 卡券ID={rule['card_id']}")
                         delivery_content = None
 
+                elif rule['card_type'] == 'image_data':
+                    # 图片卡密类型：原子预占一张未发送的图片，发送后标记已发送
+                    image_card_reservation = db_manager.reserve_image_card(
+                        card_id=rule['card_id'],
+                        order_id=order_id,
+                        unit_index=delivery_unit_index,
+                        cookie_id=self.cookie_id,
+                        buyer_id=send_user_id,
+                    )
+                    if image_card_reservation:
+                        reserved_image_url = image_card_reservation.get('image_url')
+                        delivery_content = f"__IMAGE_SEND__{rule['card_id']}|{reserved_image_url}"
+                        logger.info(f"预占图片卡密成功: 卡券ID={rule['card_id']}, 图片={reserved_image_url}, item_id={image_card_reservation.get('id')}")
+                    else:
+                        logger.error(f"图片卡密已用完或预占失败: 卡券ID={rule['card_id']}")
+                        delivery_content = None
+
                 if delivery_content:
                     delivery_steps = self._build_delivery_steps(delivery_content, rule.get('card_description', ''))
                     if not delivery_steps:
@@ -12208,6 +12298,9 @@ class XianyuLive:
                         result['data_reservation_id'] = data_reservation.get('id') if data_reservation else None
                         result['data_reservation_status'] = data_reservation.get('status') if data_reservation else None
                         result['delivery_unit_index'] = delivery_unit_index
+                        # 图片卡密预占信息
+                        result['image_card_reservation_id'] = image_card_reservation.get('id') if image_card_reservation else None
+                        result['image_card_pending_consume'] = bool(rule['card_type'] == 'image_data')
                     return result
                 else:
                     logger.warning(f"获取发货内容失败: 规则ID={rule['id']}")
