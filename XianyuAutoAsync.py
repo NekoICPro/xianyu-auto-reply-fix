@@ -6401,7 +6401,7 @@ class XianyuLive:
                                 failure_reason = f"第 {unit_index}/{quantity_to_send} 个卡券发货步骤构建失败"
                                 last_delivery_error = failure_reason
                                 self._release_data_reservation_if_needed(rule_meta, error=failure_reason)
-            self._release_image_card_if_needed(rule_meta, error=failure_reason)
+                                self._release_image_card_if_needed(rule_meta, error=failure_reason)
                                 self._record_delivery_log(
                                     order_id=order_id,
                                     item_id=item_id,
@@ -6424,7 +6424,7 @@ class XianyuLive:
 
                         except Exception as e:
                             self._release_data_reservation_if_needed(rule_meta, error=f'准备发货失败: {self._safe_str(e)}')
-            self._release_image_card_if_needed(rule_meta, error=f'准备发货失败: {self._safe_str(e)}')
+                            self._release_image_card_if_needed(rule_meta, error=f'准备发货失败: {self._safe_str(e)}')
                             last_delivery_error = f"准备第 {unit_index}/{quantity_to_send} 个卡券失败: {self._safe_str(e)}"
                             self._record_delivery_log(
                                 order_id=order_id,
@@ -6472,14 +6472,14 @@ class XianyuLive:
                             for prepared_unit in group_units:
                                 unit_rule_meta = prepared_unit.get('rule_meta') or {}
                                 unit_index = prepared_unit.get('unit_index') or 1
-            self._release_data_reservation_if_needed(
-                unit_rule_meta,
-                error=f'发送失败(unit={unit_index}): {group_error}'
-            )
-            self._release_image_card_if_needed(
-                unit_rule_meta,
-                error=f'发送失败(unit={unit_index}): {group_error}'
-            )
+                                self._release_data_reservation_if_needed(
+                                    unit_rule_meta,
+                                    error=f'发送失败(unit={unit_index}): {group_error}'
+                                )
+                                self._release_image_card_if_needed(
+                                    unit_rule_meta,
+                                    error=f'发送失败(unit={unit_index}): {group_error}'
+                                )
                                 last_delivery_error = f"发送第 {unit_index}/{quantity_to_send} 个卡券失败: {group_error}"
                                 self._record_delivery_log(
                                     order_id=order_id,
